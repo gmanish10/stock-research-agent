@@ -1,5 +1,6 @@
 # Core
-openai>=1.30
+# (No `openai` SDK — we use llm.py, a requests-based OpenAI-compatible client, to avoid the
+#  Rust-built jiter/pydantic-core deps that don't build on Termux/Android.)
 yfinance>=0.2.50          # needs Sector/Industry classes for tool_sector
 pandas>=2.0
 numpy>=1.24

@@ -29,14 +29,14 @@ load_dotenv()
 sys.path.append(os.path.join(os.path.dirname(__file__), "scripts"))  # your scripts/ + dcf.py
 
 import yfinance as yf
-from openai import OpenAI
+from llm import OllamaClient   # requests-based OpenAI-compatible client (no Rust deps; Termux-friendly)
 
 import technicals          # noqa: E402  (your script, reused as-is)
 import financial_ratios    # noqa: E402  (your script, reused as-is)
 import options_analytics   # noqa: E402  (your script, reused as-is)
 import dcf as dcf_mod      # noqa: E402  (new, unit-tested)
 
-client = OpenAI(
+client = OllamaClient(
     base_url=os.environ.get("OLLAMA_BASE_URL", "https://ollama.com/v1"),
     api_key=os.environ["OLLAMA_API_KEY"],
 )
@@ -679,7 +679,7 @@ def _get_local_client():
     global _local_client
     if _local_client is None:
         # default to the cloud Ollama connection; LOCAL_* overrides point it at a local daemon
-        _local_client = OpenAI(
+        _local_client = OllamaClient(
             base_url=os.environ.get("LOCAL_BASE_URL") or os.environ.get("OLLAMA_BASE_URL", "https://ollama.com/v1"),
             api_key=os.environ.get("LOCAL_API_KEY") or os.environ.get("OLLAMA_API_KEY", "ollama"))
     return _local_client
