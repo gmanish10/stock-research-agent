@@ -81,3 +81,58 @@ journalctl -u stock-research-bot -f      # expect: "Bot running (polling)."  (no
 
 ## Cost (approx/month)
 Hetzner CAX21 ~€6.5 · Ollama Cloud free tier→~$20 Pro if heavy · Brave ~$5 · llama3.2 local $0.
+
+---
+
+# Run on an Android phone (Termux)
+
+A spare Android phone (e.g. LineageOS) running **Termux** works as the always-on host. Everything
+is **cloud** here — GLM *and* the helper model run on Ollama Cloud, so there's no local model to
+install. Recommended: **text-only delivery** (`REPORT_PDF=0`) to skip the heavy PDF deps that are
+painful to compile on Termux.
+
+> Install Termux from **F-Droid** (the Play Store build is outdated). Keep the phone **plugged in**.
+
+### 1. Base packages
+```bash
+pkg update && pkg upgrade -y
+pkg install -y python git
+# numpy/pandas: Termux-native builds (PyPI wheels don't run on Termux's bionic libc)
+pkg install -y python-numpy
+pip install pandas        # if this stalls/fails: `pkg install tur-repo && pkg install python-pandas`
+```
+
+### 2. Get the code (private repo → use a GitHub token)
+```bash
+git clone https://<GITHUB_PAT>@github.com/gmanish10/stock-research-agent.git
+cd stock-research-agent
+pip install -r requirements-min.txt     # pure-python deps; reuses the pkg numpy/pandas
+```
+
+### 3. Configure `.env` (all cloud, text-only)
+```bash
+cp .env.example .env && nano .env
+```
+Set: `OLLAMA_API_KEY`, `OLLAMA_BASE_URL=https://ollama.com/v1`, `MODEL=glm-5.2`,
+`BRAVE_API_KEY`, `TELEGRAM_TOKEN`, `ALLOWED_IDS`, and **`REPORT_PDF=0`**.
+Leave **`LOCAL_*` unset** — the helper model then runs on Ollama Cloud (`deepseek-v4-flash`)
+automatically. Optional: `SAVE_RUNS=0` to avoid filling phone storage.
+
+### 4. Run it (keep awake + auto-restart)
+```bash
+pkg install -y termux-services tmux
+termux-wake-lock                         # stop Android from sleeping the process
+tmux new -s bot 'python bot_telegram.py' # detach with Ctrl-b d ; reattach: tmux attach -t bot
+```
+For start-on-boot, install the **Termux:Boot** addon (F-Droid) and drop a startup script that runs
+`termux-wake-lock && python bot_telegram.py`.
+
+### 5. Same rules as the server
+- **One poller only** — stop the Mac bot (`pkill -f bot_telegram.py`) before starting the phone.
+- Verify: send `/research NVDA` from Telegram → chunked-text report in ~1–3 min.
+- Update: `git pull` then restart the tmux session.
+
+### If you want PDFs on the phone later
+Install the build deps and the PDF stack (slower, and `cryptography` needs Rust):
+`pkg install rust binutils libjpeg-turbo libpng freetype libxml2 libxslt` then
+`pip install markdown xhtml2pdf`, and set `REPORT_PDF=1`. Text-only is the reliable default.

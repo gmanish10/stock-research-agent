@@ -2,9 +2,10 @@
 Resolve a free-text query to a concrete instrument + type, so users never need /etf or /sector
 — they just type ("SOXX", "Nifty IT", "tech sector outlook", "is Apple a buy?").
 
-Design: llama 3.2 *infers* intent (a linguistic task), but every decision is *verified against
-real data* (yfinance quoteType / Search, Brave fallback) so the weak local model can never route
-on trust alone — same principle as the structural checker. Ambiguous cases return `candidates`
+Design: a small helper model *infers* intent (a linguistic task), but every decision is *verified
+against real data* (yfinance quoteType / Search) so the weak model can never route on trust alone —
+same principle as the structural checker. The helper model defaults to a small/fast Ollama Cloud
+model (see main._helper_model); set LOCAL_* to use a local one. Ambiguous cases return `candidates`
 so the bot can ask the user.
 
 resolve(text) -> {
@@ -108,7 +109,7 @@ def _classify_llm(text):
         return None
     try:
         r = main._get_local_client().chat.completions.create(
-            model=os.environ.get("LOCAL_MODEL", "llama3.2"),
+            model=main._helper_model(),
             messages=[{"role": "system", "content": _CLASSIFY},
                       {"role": "user", "content": text}],
             response_format={"type": "json_object"})

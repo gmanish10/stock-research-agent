@@ -657,21 +657,31 @@ def _verify(report, facts, verifier=VERIFIER_EQUITY):
         return {"passed": True, "issues": []}              # fail-open, never loop forever
 
 
-# ---------- independent structural check on the LOCAL model (Llama 3.2 via Ollama) ----------
+# ---------- helper model: independent structural check + resolver intent ----------
 #
-# The GLM verifier above also wrote the draft, so same-model blind spots survive. A small local
+# The GLM verifier above also wrote the draft, so same-model blind spots survive. A small, cheap
 # model can't be trusted on the numbers, but it CAN cheaply and INDEPENDENTLY confirm structure
-# (every rating has its fields, OI/sector are present, disclaimer attached). It's fail-open and
-# gated by STRUCT_CHECK so a missing/offline local model never blocks a run.
+# (every rating has its fields, OI/sector are present, disclaimer attached). Same small model also
+# powers resolver intent. It is fail-open and gated by STRUCT_CHECK so an unavailable model never
+# blocks a run. By default it reuses the Ollama Cloud connection with a small/fast model
+# (deepseek-v4-flash) — no local daemon needed (works on a phone). To use a LOCAL model instead,
+# set LOCAL_BASE_URL=http://localhost:11434/v1 and LOCAL_MODEL=llama3.2.
 
+DEFAULT_HELPER_MODEL = "deepseek-v4-flash"   # small/fast cloud model for structural check + resolver
 _local_client = None
+
+
+def _helper_model():
+    return os.environ.get("LOCAL_MODEL") or DEFAULT_HELPER_MODEL
 
 
 def _get_local_client():
     global _local_client
     if _local_client is None:
-        _local_client = OpenAI(base_url=os.environ.get("LOCAL_BASE_URL", "http://localhost:11434/v1"),
-                               api_key=os.environ.get("LOCAL_API_KEY", "ollama"))
+        # default to the cloud Ollama connection; LOCAL_* overrides point it at a local daemon
+        _local_client = OpenAI(
+            base_url=os.environ.get("LOCAL_BASE_URL") or os.environ.get("OLLAMA_BASE_URL", "https://ollama.com/v1"),
+            api_key=os.environ.get("LOCAL_API_KEY") or os.environ.get("OLLAMA_API_KEY", "ollama"))
     return _local_client
 
 
@@ -694,7 +704,7 @@ def _structural_check(report, kind="equity"):
         return {"passed": True, "issues": []}
     try:
         r = _get_local_client().chat.completions.create(
-            model=os.environ.get("LOCAL_MODEL", "llama3.2"),
+            model=_helper_model(),
             messages=[{"role": "system", "content": STRUCT_VERIFIER},
                       {"role": "user", "content": f"REPORT:\n{report[:12000]}"}],
             response_format={"type": "json_object"})
