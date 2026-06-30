@@ -107,4 +107,4 @@ users don't block each other — but every request spends *your* Ollama/Brave qu
 - **Self-verification ≠ correctness.** It enforces sourcing, OI/sector coverage, and coherence — not whether the thesis is right. Cross-check anything you trade on.
 - **Keep `.env` private** — it holds your keys and the bot will research for anyone allow-listed.
 
-See `telegram-stock-research-agent-guide.md` (shipped separately) for the full design rationale and verification notes.
+See `DEPLOY.md` for running the bot 24/7 on an Android phone (Termux).
