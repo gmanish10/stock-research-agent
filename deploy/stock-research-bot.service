@@ -1,0 +1,22 @@
+[Unit]
+Description=Stock Research Telegram Bot
+# Start after the network is up and the local Ollama daemon (helper LLM) is available.
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bot
+WorkingDirectory=/opt/stock-research-agent
+# bot_telegram.py calls load_dotenv(), which reads .env from WorkingDirectory — no EnvironmentFile needed.
+ExecStart=/opt/stock-research-agent/.venv/bin/python bot_telegram.py
+Restart=always
+RestartSec=5
+# Logs go to journald: journalctl -u stock-research-bot -f
+# Light hardening (the app only writes under WorkingDirectory: runs/ and reports/).
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
