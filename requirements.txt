@@ -11,6 +11,7 @@ python-dotenv>=1.0
 # PDF delivery (bot sends the report as a dated PDF; falls back to text if missing)
 markdown>=3.5
 xhtml2pdf>=0.2.16
+tzdata                    # xhtml2pdf->pyHanko loads a timezone; Termux has no system tz database
 
 # Optional (portfolio intake / docx reports — not used by stock-research mode)
 # openpyxl>=3.1
