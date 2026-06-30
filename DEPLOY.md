@@ -1,138 +1,98 @@
-# Deploying the bot to Hetzner (24/7)
+# Run the bot 24/7 on an Android phone (Termux)
 
-Runs the Telegram bot on an always-on Hetzner VPS under systemd. The bot is **outbound
-long-polling** — no domain, no open ports, no reverse proxy. GLM runs via the Ollama **Cloud
-API** (no local Ollama needed for it); **llama3.2 runs locally** as the helper LLM (resolver
-intent + structural check).
+A spare Android phone (e.g. LineageOS) running **Termux** is the host. Everything is **cloud** —
+GLM-5.2 *and* the small helper model both run on Ollama Cloud, so there's **no local model** to
+install. Reports are delivered as **dated PDFs**.
 
-> ⚠️ The Telegram token can be polled by **one process only**. Stop any other bot on this token
-> (e.g. the one on your Mac) **before** starting the server: `pkill -f "python bot_telegram.py"`.
+> - Install **Termux from F-Droid** (the Play Store build is outdated and breaks).
+> - Keep the phone **plugged in** and on Wi-Fi.
+> - One poller per token: **stop any other instance** of the bot before starting this one.
 
-## 1. Push the code (your Mac)
-`.env`, `runs/`, `reports/` are gitignored — they never leave your machine.
-```bash
-git check-ignore .env            # must print: .env
-git add -A && git commit -m "…"  # if not already committed
-gh repo create stock-research-agent --private --source=. --push   # or push to a repo you made
-```
-
-## 2. Create the server
-- **Hetzner Cloud CAX21** (8 GB Arm, ~€6.5/mo) — or **CX32** (8 GB x86). Avoid 4 GB boxes; the
-  llama3.2 3B model needs headroom.
-- Image: **Ubuntu 24.04 LTS**. Add your **SSH public key** (password login off).
-- **Cloud Firewall**: inbound allow **TCP 22 only**; outbound allow all.
-- SSH in as root, create a sudo user named **`bot`**, copy your key to it, then work as `bot`:
-  ```bash
-  adduser --disabled-password --gecos "" bot && usermod -aG sudo bot
-  rsync --archive ~/.ssh/authorized_keys /home/bot/.ssh/ && chown -R bot:bot /home/bot/.ssh
-  ```
-
-## 3. Provision (as `bot` on the server)
-```bash
-REPO_URL=git@github.com:<you>/stock-research-agent.git bash <(curl -fsSL \
-  https://raw.githubusercontent.com/<you>/stock-research-agent/main/deploy/setup.sh)
-# …or clone first, then: cd /opt/stock-research-agent && REPO_URL=… bash deploy/setup.sh
-```
-`setup.sh` installs apt deps, Ollama + `llama3.2`, the venv + Python deps, and the systemd service.
-
-## 4. Secrets
-Copy your working `.env` to the server (keep the **cloud GLM** route + **local helper LLM**):
-```bash
-# from your Mac:
-scp .env bot@<server-ip>:/opt/stock-research-agent/.env
-```
-Relevant keys: `OLLAMA_BASE_URL=https://ollama.com/v1`, `MODEL=glm-5.2`,
-`LOCAL_BASE_URL=http://localhost:11434/v1`, `LOCAL_MODEL=llama3.2`, `RESOLVER_LLM=1`,
-`STRUCT_CHECK=1`, plus `OLLAMA_API_KEY`, `BRAVE_API_KEY`, `TELEGRAM_TOKEN`, `ALLOWED_IDS`.
-The server sets `chmod 600 .env`.
-
-## 5. Cutover & start
-```bash
-# on the Mac: stop the local poller first
-pkill -f "python bot_telegram.py"
-# on the server:
-sudo systemctl start stock-research-bot
-journalctl -u stock-research-bot -f      # expect: "Bot running (polling)."  (no 409 conflict)
-```
-
-## 6. Verify
-1. `systemctl status stock-research-bot` → active (running).
-2. Helper LLM: `curl -s localhost:11434/api/tags | grep llama3.2`.
-3. GLM cloud auth → 200:
-   ```bash
-   cd /opt/stock-research-agent && .venv/bin/python - <<'PY'
-   import os,requests; from dotenv import load_dotenv; load_dotenv()
-   r=requests.post("https://ollama.com/v1/chat/completions",
-     headers={"Authorization":"Bearer "+os.environ["OLLAMA_API_KEY"]},
-     json={"model":"glm-5.2","messages":[{"role":"user","content":"hi"}]},timeout=60)
-   print(r.status_code)
-   PY
-   ```
-4. From Telegram (allow-listed user): `/research NVDA` → ack, then a dated **PDF** in ~1–3 min.
-5. Confirm-gate + theme: `/research indian manufacturing sector` → bot asks → reply `yes` → brief.
-   Check `ls runs/ reports/` and the log line `resolved … -> theme`.
-6. `sudo reboot` → after boot the bot auto-starts; send `/research SOXX`.
-
-## Ops
-- **Logs**: `journalctl -u stock-research-bot -f`
-- **Update**: `cd /opt/stock-research-agent && git pull && sudo systemctl restart stock-research-bot`
-- **Refresh helper model**: `ollama pull llama3.2`
-- **Disk**: `runs/` and `reports/` grow over time — prune or back up periodically.
-
-## Cost (approx/month)
-Hetzner CAX21 ~€6.5 · Ollama Cloud free tier→~$20 Pro if heavy · Brave ~$5 · llama3.2 local $0.
-
----
-
-# Run on an Android phone (Termux)
-
-A spare Android phone (e.g. LineageOS) running **Termux** works as the always-on host. Everything
-is **cloud** here — GLM *and* the helper model run on Ollama Cloud, so there's no local model to
-install. Recommended: **text-only delivery** (`REPORT_PDF=0`) to skip the heavy PDF deps that are
-painful to compile on Termux.
-
-> Install Termux from **F-Droid** (the Play Store build is outdated). Keep the phone **plugged in**.
-
-### 1. Base packages
+## 1. Base packages
 ```bash
 pkg update && pkg upgrade -y
 pkg install -y python git
-# numpy/pandas: Termux-native builds (PyPI wheels don't run on Termux's bionic libc)
-pkg install -y python-numpy
-pip install pandas        # if this stalls/fails: `pkg install tur-repo && pkg install python-pandas`
 ```
 
-### 2. Get the code (private repo → use a GitHub token)
+## 2. Heavy native deps via Termux (NOT pip)
+Termux runs Android's bionic libc, so normal PyPI wheels don't work — install the compiled
+packages from Termux's own repos first:
+```bash
+pkg install -y python-numpy python-lxml python-pillow python-cryptography
+pkg install -y tur-repo && pkg install -y python-pandas
+```
+(If `python-pandas` isn't found, `pip install pandas` also works once `python-numpy` is present —
+just slower.)
+
+## 3. Get the code (private repo → GitHub token)
+Create a read-only **Personal Access Token** (GitHub → Settings → Developer settings → Fine-grained
+tokens, this repo only), then:
 ```bash
 git clone https://<GITHUB_PAT>@github.com/gmanish10/stock-research-agent.git
 cd stock-research-agent
-pip install -r requirements-min.txt     # pure-python deps; reuses the pkg numpy/pandas
 ```
 
-### 3. Configure `.env` (all cloud, text-only)
+## 4. Python deps (incl. the PDF stack)
+The native deps from step 2 are already satisfied, so this only adds the pure/light ones
+(openai, telegram, markdown, xhtml2pdf, reportlab, …):
+```bash
+pip install -r requirements.txt
+```
+If a PDF dep fails to build, see **Troubleshooting** below — you can run text-only temporarily.
+
+## 5. Configure `.env` (all cloud, PDF on)
 ```bash
 cp .env.example .env && nano .env
 ```
-Set: `OLLAMA_API_KEY`, `OLLAMA_BASE_URL=https://ollama.com/v1`, `MODEL=glm-5.2`,
-`BRAVE_API_KEY`, `TELEGRAM_TOKEN`, `ALLOWED_IDS`, and **`REPORT_PDF=0`**.
-Leave **`LOCAL_*` unset** — the helper model then runs on Ollama Cloud (`deepseek-v4-flash`)
-automatically. Optional: `SAVE_RUNS=0` to avoid filling phone storage.
-
-### 4. Run it (keep awake + auto-restart)
-```bash
-pkg install -y termux-services tmux
-termux-wake-lock                         # stop Android from sleeping the process
-tmux new -s bot 'python bot_telegram.py' # detach with Ctrl-b d ; reattach: tmux attach -t bot
+Set:
 ```
-For start-on-boot, install the **Termux:Boot** addon (F-Droid) and drop a startup script that runs
-`termux-wake-lock && python bot_telegram.py`.
+OLLAMA_API_KEY=...           # your ollama.com key
+OLLAMA_BASE_URL=https://ollama.com/v1
+MODEL=glm-5.2
+BRAVE_API_KEY=...
+TELEGRAM_TOKEN=...           # from @BotFather
+ALLOWED_IDS=...              # your Telegram id from @userinfobot (comma-separate for more)
+REPORT_PDF=1                 # deliver PDFs
+```
+**Leave every `LOCAL_*` line unset/commented** — that routes the helper model to Ollama Cloud
+(`deepseek-v4-flash`) automatically. No local Ollama needed.
 
-### 5. Same rules as the server
-- **One poller only** — stop the Mac bot (`pkill -f bot_telegram.py`) before starting the phone.
-- Verify: send `/research NVDA` from Telegram → chunked-text report in ~1–3 min.
-- Update: `git pull` then restart the tmux session.
+## 6. Run it (stays awake, survives disconnect)
+```bash
+pkg install -y tmux
+termux-wake-lock                          # stop Android from sleeping the process
+tmux new -s bot 'python bot_telegram.py'  # detach: Ctrl-b then d ; reattach: tmux attach -t bot
+```
+Expect `Bot running (polling).` in the log.
 
-### If you want PDFs on the phone later
-Install the build deps and the PDF stack (slower, and `cryptography` needs Rust):
-`pkg install rust binutils libjpeg-turbo libpng freetype libxml2 libxslt` then
-`pip install markdown xhtml2pdf`, and set `REPORT_PDF=1`. Text-only is the reliable default.
+**Auto-start on reboot:** install the **Termux:Boot** addon (F-Droid), then:
+```bash
+mkdir -p ~/.termux/boot
+cat > ~/.termux/boot/start-bot <<'EOF'
+#!/data/data/com.termux/files/usr/bin/sh
+termux-wake-lock
+cd ~/stock-research-agent && exec python bot_telegram.py
+EOF
+chmod +x ~/.termux/boot/start-bot
+```
+
+## 7. Verify
+From Telegram (as an allow-listed user):
+- `/research NVDA` → ack, then a dated **PDF** in ~1–3 min.
+- `/research indian manufacturing sector` → bot confirms → reply `yes` → thematic-brief PDF.
+
+## Ops
+- **Logs:** `tmux attach -t bot` (or run without tmux to watch live).
+- **Update:** `cd ~/stock-research-agent && git pull` then restart the tmux session.
+- **Storage:** `runs/` and `reports/` grow over time — delete old files, or set `SAVE_RUNS=0`.
+
+## Troubleshooting
+- **A PDF dep won't build** (e.g. `reportlab`/`cryptography`): install Rust + build tools and retry:
+  `pkg install -y rust binutils libjpeg-turbo libpng freetype libxml2 libxslt` then
+  `pip install -r requirements.txt`. As a stopgap, set `REPORT_PDF=0` to send text until PDFs build.
+- **`409 Conflict` in the log:** another process is polling the same token — stop it (only one bot
+  per token).
+- **Private clone asks for a password:** your PAT is wrong/expired — regenerate it and re-clone.
+
+## Cost (approx/month)
+Phone host **$0** · Ollama Cloud free tier → ~$20 Pro if heavy · Brave ~$5.

@@ -96,7 +96,7 @@ users don't block each other — but every request spends *your* Ollama/Brave qu
 |---|---|
 | Ollama Cloud | Free tier (daily quota) to start; ~$20/mo Pro for sustained use |
 | Brave Search | Metered ~$5 / 1,000 queries; ~$5 free credits/mo; **card required** |
-| Hosting | $0 on an always-on home machine/Pi; ~$5–6/mo VPS for 24/7 |
+| Hosting | $0 — runs 24/7 on a spare Android phone via Termux (see DEPLOY.md) |
 | yfinance | Free |
 
 ## Must-knows
