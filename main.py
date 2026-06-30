@@ -19,6 +19,7 @@ import re
 import sys
 import json
 import time
+import logging
 import datetime
 import threading
 
@@ -29,6 +30,7 @@ load_dotenv()
 sys.path.append(os.path.join(os.path.dirname(__file__), "scripts"))  # your scripts/ + dcf.py
 
 import yfinance as yf
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)   # silence noisy "HTTP Error 404" lines
 from llm import OllamaClient   # requests-based OpenAI-compatible client (no Rust deps; Termux-friendly)
 
 import technicals          # noqa: E402  (your script, reused as-is)
@@ -100,11 +102,31 @@ def _prev(df):
 
 # ---------- tools: thin wrappers around your scripts (DATA=yfinance, MATH=scripts) ----------
 
+def tool_lookup(query: str) -> str:                        # name/ticker -> real Yahoo symbols
+    """Resolve a company/fund/index NAME (or guessed ticker) to its actual Yahoo symbol(s) via
+    Search. Use this before pulling data so you never guess exchange suffixes (e.g. TATAMOTORS.BO
+    is delisted — the real symbols are TMCV.NS / TMPV.NS)."""
+    try:
+        quotes = _retry(lambda: yf.Search(query).quotes) or []
+    except Exception as e:
+        return json.dumps({"source": "yfinance Search", "query": query, "error": str(e)})
+    matches = [{"symbol": q.get("symbol"), "quote_type": q.get("quoteType"),
+                "name": q.get("shortname") or q.get("longname"), "exchange": q.get("exchange")}
+               for q in quotes if q.get("symbol")][:8]
+    return json.dumps({"source": "yfinance Search", "query": query, "matches": matches})
+
+
 def tool_snapshot(ticker: str) -> str:
     i = _info(_ticker(ticker))
     keys = ["longName", "sector", "industry", "marketCap", "currentPrice", "beta",
             "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "trailingPE", "forwardPE"]
-    return json.dumps({"source": "yfinance .info", "data": {k: i.get(k) for k in keys}})
+    data = {k: i.get(k) for k in keys}
+    # invalid/delisted symbol -> yfinance returns an empty .info; flag it so the model uses
+    # tool_lookup instead of treating empty fields as real, and the coverage footer catches it.
+    if not any(data.get(k) for k in ("longName", "currentPrice", "marketCap")):
+        return json.dumps({"source": "yfinance .info", "ticker": ticker,
+                           "error": f"no data for {ticker} (invalid/delisted symbol? use tool_lookup)"})
+    return json.dumps({"source": "yfinance .info", "data": data})
 
 
 def tool_ratios(ticker: str) -> str:                       # -> financial_ratios.py
@@ -366,6 +388,7 @@ TOOLS_IMPL = {"tool_snapshot": tool_snapshot, "tool_ratios": tool_ratios,
               "tool_technicals": tool_technicals, "tool_dcf": tool_dcf,
               "tool_options": tool_options, "tool_sector": tool_sector,
               "tool_sector_overview": tool_sector_overview, "tool_etf": tool_etf,
+              "tool_lookup": tool_lookup,
               "tool_analyst": tool_analyst, "tool_web_search": tool_web_search}
 
 
@@ -395,6 +418,9 @@ TOOLS_SPEC = [
        {"sector_key": {"type": "string"}}, ["sector_key"]),
     _s("tool_etf", "ETF/fund profile: expense ratio, AUM, yield, top holdings, sector weightings, "
        "premium/discount to NAV (yfinance .info + .funds_data)", {"ticker": {"type": "string"}}, ["ticker"]),
+    _s("tool_lookup", "Resolve a company/fund/index NAME (or a guessed ticker) to its REAL Yahoo "
+       "symbol(s) via Search. Use before pulling data — don't guess exchange suffixes like .NS/.BO.",
+       {"query": {"type": "string"}}, ["query"]),
     _s("tool_analyst", "Earnings catalyst + street view: next earnings/ex-div date, analyst price "
        "targets (current/low/high/mean), and recommendation trend (yfinance)",
        {"ticker": {"type": "string"}}, ["ticker"]),
@@ -466,9 +492,12 @@ NO single ticker for this and it is not one of the 11 standard sectors — your 
 ways to get exposure and brief them. Do NOT invent tickers or pick one random stock. Steps:
  - Discover instruments -> tool_web_search. Run a few searches (the theme itself, '{name} ETF',
    '{name} index', 'top {name} stocks') to identify the concrete vehicles — ETFs, indices, and 2-5
-   leading stocks — WITH their real ticker symbols. Cite source URLs.
- - Add live data -> for instruments where you found a real ticker, you MAY call tool_snapshot,
-   tool_etf, or tool_technicals (price, expense ratio, trend). SKIP any symbol you cannot verify;
+   leading stocks. Cite source URLs.
+ - Get the REAL ticker -> tool_lookup(name) for each instrument/company. DO NOT guess exchange
+   suffixes (.NS/.BO/etc.) — tickers change (e.g. TATAMOTORS is delisted; the real ones are
+   TMCV.NS / TMPV.NS). Use the symbol tool_lookup returns.
+ - Add live data -> with that verified symbol, call tool_snapshot, tool_etf, or tool_technicals
+   (price, expense ratio, trend). If a tool returns an "error"/no-data, SKIP that instrument;
    never state a ticker that did not come from a tool result.
  - PRIORITISE THE LOCAL MARKET for a country/regional theme. Research the actual local-exchange
    instruments, not just US-listed proxies: for India use NSE '.NS' / BSE '.BO' tickers (e.g.
