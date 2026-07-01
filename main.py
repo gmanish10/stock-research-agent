@@ -445,16 +445,18 @@ Always run ALL of these (none optional):
  - Valuation -> tool_dcf (state assumptions + implied upside/downside; present the bear/base/bull
    span from its sensitivity grid, not just one point estimate)
  - Technicals/trend -> tool_technicals
- - Options positioning -> tool_options. EXPLICITLY factor in OPEN INTEREST: call vs put OI,
-   P/C OI ratio, max-pain, OI magnet strikes, and unusual activity — and say what that
-   positioning implies for the likely move and for your price levels.
+ - Options positioning -> tool_options. If options ARE listed, EXPLICITLY factor in OPEN INTEREST:
+   call vs put OI, P/C OI ratio, max-pain, OI magnet strikes, and unusual activity — and say what
+   that implies for the likely move and your price levels. If the tool reports no options (common
+   for non-US listings like .KS/.NS/.HK — Yahoo has no chain), note that in ONE line and move on;
+   derive levels from technicals instead. Do not dwell on it or treat it as a weakness.
  - Earnings catalyst + street view -> tool_analyst. Note the NEXT EARNINGS DATE (a near-term
    catalyst/risk that should shape the SHORT-term rating and stop), and compare the analyst
    price-target range and buy/hold/sell trend against your own DCF target.
  - Catalysts/news/sentiment -> tool_web_search (cite source URLs, last ~30 days)
-The verdict must REFLECT the synthesis: tie targets to DCF and to max-pain/OI magnet levels,
-tie stops to technicals (ATR/SMA), and state how the sector trend and options OI skew
-support or threaten the thesis.
+The verdict must REFLECT the synthesis: tie targets to DCF and — where options exist — to max-pain/
+OI magnet levels; tie stops to technicals (ATR/SMA); and state how the sector trend and (if present)
+options skew support or threaten the thesis.
 """ + _HARD_RULES + "\n" + _RATINGS_TAIL
 
 SYSTEM_ETF = """You are a markets analyst. INSTRUMENT: {name} [{symbol}] — an ETF/FUND, not a single
