@@ -37,6 +37,36 @@ def _safe_label(label: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", label or "")[:12] or "report"
 
 
+# Currency glyphs the built-in PDF fonts lack (they render as ■ tofu) -> readable ISO codes.
+_GLYPH_FALLBACKS = {"₩": "KRW ", "₹": "Rs ", "₽": "RUB ", "₺": "TRY "}
+
+
+def _transliterate(text: str) -> str:
+    for ch, rep in _GLYPH_FALLBACKS.items():
+        text = text.replace(ch, rep)
+    return text
+
+
+def _add_colgroups(html: str) -> str:
+    """xhtml2pdf auto-sizes columns and sometimes starves the last one (the 3-col 'Signal'
+    column collapsed to ~1 word, wrapping vertically). Injecting a <colgroup> with explicit
+    equal widths forces an even split — xhtml2pdf honours <col> widths even though it ignores
+    CSS table-layout:fixed. Only tables with 3+ columns need it (2-col ones render fine)."""
+    def repl(m):
+        table = m.group(0)
+        first = re.search(r"<tr>(.*?)</tr>", table, re.S)
+        if not first:
+            return table
+        n = len(re.findall(r"<t[hd]\b", first.group(1)))
+        if n < 3:
+            return table
+        w = round(100 / n, 3)
+        cols = "".join(f'<col style="width:{w}%" />' for _ in range(n))
+        return re.sub(r"(<table[^>]*>)", lambda mm: mm.group(1) + f"<colgroup>{cols}</colgroup>",
+                      table, count=1)
+    return re.sub(r"<table\b.*?</table>", repl, html, flags=re.S)
+
+
 def _cells(line):
     s = line.strip().strip("|")
     return [c.strip() for c in s.split("|")]
@@ -90,8 +120,8 @@ def build_pdf(report_md: str, label: str, out_dir: str | None = None,
     when = when or datetime.date.today().isoformat()
     path = os.path.join(out_dir, f"{when}_{_safe_label(label)}.pdf")
 
-    body = markdown.markdown(_flatten_keyvalue_tables(report_md),
-                             extensions=["tables", "fenced_code"])
+    md = _transliterate(_flatten_keyvalue_tables(report_md))
+    body = _add_colgroups(markdown.markdown(md, extensions=["tables", "fenced_code"]))
     html = (f"<html><head><meta charset='utf-8'><style>{_CSS}</style></head>"
             f"<body>{body}</body></html>")
     with open(path, "wb") as fh:
