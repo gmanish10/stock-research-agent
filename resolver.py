@@ -165,6 +165,24 @@ def _rank(cands, prefer_qt):
 
 
 def resolve(text):
+    """Resolve free text to an intent, first peeling off a horizon modifier: 'NVDA long',
+    'long term view on AAPL' etc. set intent['horizon']='long' (research() maps equity ->
+    equity_long, the no-options / no-trading report). Only a trailing 'long' or an explicit
+    'long term' phrase counts — 'how long will X rally' is untouched."""
+    t = (text or "").strip()
+    horizon = None
+    cleaned = re.sub(r"(?i)\blong[- ]term\b", " ", t)
+    cleaned = re.sub(r"(?i)\s+long\s*$", "", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    if cleaned and cleaned != t:
+        horizon, t = "long", cleaned
+    r = _resolve(t)
+    r["horizon"] = horizon
+    r["query"] = (text or "").strip()      # keep the user's original phrasing for the task msg
+    return r
+
+
+def _resolve(text):
     """Return a best-guess intent with a `confidence` so the caller can confirm before acting.
     HIGH = exact symbol / alias (auto-proceed). MEDIUM/LOW = confirm with the user. We never
     silently pick a coincidental Search/Brave match — that produced 'indian manufacturing' -> MFG."""

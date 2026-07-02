@@ -485,6 +485,10 @@ _RATINGS_TAIL = """End with SHORT/MID/LONG ratings; each needs Rating, Convictio
 Stop, 'WHAT KILLS THIS TRADE' (with % loss), position size. Append:
 'Educational only, not financial advice.'"""
 
+_RATINGS_TAIL_LONG = """End with ONE LONG-TERM rating (3-5+ year horizon): Rating, Conviction,
+Fair-value range (the DCF sensitivity span), Accumulation zone, 'WHAT KILLS THIS THESIS'
+(with % loss), and position size. Append: 'Educational only, not financial advice.'"""
+
 _HARD_RULES = """HARD RULES:
 - Tools compute every number. NEVER do arithmetic yourself or recall figures from memory.
 - Attribute each datum (Yahoo Finance, a named script, or a web_search URL). If a tool
@@ -529,6 +533,38 @@ DCF fair value and upside — every figure straight from tool results.
 ## Ratings
 Section arc: business QUALITY (moat, segments, trends, SWOT) -> PRICE (DCF vs street) ->
 the long-term THESIS those two imply -> TIMING (technicals, options) -> ACTION (ratings)."""
+
+_EQUITY_LONG_SKELETON = """OUTPUT FORMAT — use EXACTLY this markdown skeleton (one H1 title, then
+these H2 sections in this order; use H3 subheadings freely inside them; do not add/rename/reorder
+H2s):
+
+# <Company Name> [<TICKER>] — Long-Term Investment Deep Dive
+
+## TL;DR
+Open with one bold verdict line. Then 5-7 bullets covering: DCF fair-value range vs current price;
+the moat in one line; the dominant multi-year fundamental trend; the single biggest long-term
+risk; what would change the thesis. Close with this mini-table — keep the header row filled in
+exactly as shown (an empty header row breaks rendering):
+| Horizon | Rating | Fair-value range | Conviction |
+|---|---|---|---|
+| LONG (3-5y) | ... | ... | ... |
+Every number in the TL;DR must also appear, with context, in the body below.
+
+## Key numbers
+One table: current price, market cap, trailing/forward P/E, margins, ROE/ROIC, FCF yield,
+DCF fair-value range — every figure straight from tool results.
+
+## Business & Moat
+## Revenue segments
+## Multi-year fundamentals
+## SWOT
+## Valuation
+## Street view
+## Long-term hypothesis
+## Trend context
+## Rating
+Section arc: business QUALITY (moat, segments, trends, SWOT) -> PRICE (DCF vs street) ->
+THESIS -> a one-section trend check -> ACTION (one long-term rating)."""
 
 SYSTEM_EQUITY = """You are an equity research analyst. For the ticker, produce ONE comprehensive,
 integrated deep dive — synthesize the phases together, do not output disconnected sections.
@@ -576,6 +612,42 @@ OI magnet levels; tie stops to technicals (ATR/SMA); and state how the sector tr
 options skew support or threaten the thesis. The LONG rating must follow explicitly from the
 long-term hypothesis, moat, and multi-year trends — not read as a stretched technical call.
 """ + _HARD_RULES + "\n" + _RATINGS_TAIL + "\n" + _EQUITY_SKELETON
+
+SYSTEM_EQUITY_LONG = """You are an equity research analyst writing a LONG-TERM (3-5+ year)
+INVESTMENT deep dive. The reader is a potential long-term owner, not a trader: NO options
+analysis, NO short-term trade levels, NO RSI/MACD/Bollinger. Produce ONE integrated report —
+synthesize, do not output disconnected sections. Always run ALL of these (none optional):
+ - Business + sector context -> tool_snapshot, tool_sector (sector trend, peer names)
+ - Fundamentals -> tool_ratios
+ - Multi-year trends -> tool_fundamentals: revenue/EPS/FCF CAGR, margin and ROIC trajectory,
+   share count (dilution vs buybacks), debt trend. Say whether the fundamentals are improving
+   or deteriorating across the window and why that matters for a multi-year holder.
+ - Business model & moat -> tool_fundamentals (business_summary) + tool_company_research: what
+   the company sells, its revenue segments/mix, competitive position and moat (pricing power,
+   switching costs, scale, network effects, brand, regulation) and key competitors. State in one
+   line where the company sits in its industry VALUE CHAIN. Define any niche term in plain
+   language at first use. For non-US names search by COMPANY NAME, not the exchange-suffixed
+   ticker. Cite source URLs for any segment or market-share figure; if segment data cannot be
+   found, say so in ONE line — never guess a split.
+ - Calibrate depth to maturity: for early-stage / micro-cap / story names (tiny revenue vs
+   market cap, pre-profit, recently listed) cover management's track record, the economics and
+   STRUCTURE of any anchor deal, and capital structure/dilution -> tool_company_research (run
+   ONE dedicated query each for founders and deal value if they haven't surfaced). For
+   established large-caps cover these only where material.
+ - Valuation -> tool_dcf: state assumptions and present the bear/base/bull fair-value SPAN from
+   the sensitivity grid — the span IS the target range for a long-term owner.
+ - Street view -> tool_analyst: compare the analyst price-target range against your DCF span;
+   note the next earnings date in ONE line as a checkpoint, not a catalyst to trade.
+ - Structural news -> tool_web_search (cite URLs): developments that change the MULTI-YEAR
+   picture (strategy, competition, regulation, capital allocation) — skip day-to-day noise.
+ - Trend context -> tool_technicals, ONE short section only: price vs 200-day SMA, position in
+   the 52-week range, and any golden/death cross. Nothing else from the technicals output.
+ - Long-term view: a STRENGTHS / WEAKNESSES / OPPORTUNITIES / RISKS assessment grounded in the
+   data above, then an explicit LONG-TERM INVESTMENT HYPOTHESIS (2-4 sentences): the durable
+   3-5+ year thesis, what must stay true, and what would break it.
+The rating must follow explicitly from the hypothesis, moat, multi-year trends, and the DCF
+fair-value span — never from short-term price action.
+""" + _HARD_RULES + "\n" + _RATINGS_TAIL_LONG + "\n" + _EQUITY_LONG_SKELETON
 
 SYSTEM_ETF = """You are a markets analyst. INSTRUMENT: {name} [{symbol}] — an ETF/FUND, not a single
 company. Do NOT run a DCF, single-company ratios, or earnings/analyst tools (they don't apply).
@@ -679,6 +751,27 @@ VERIFIER_EQUITY = _VERIFIER_HEAD + """
     repeatedly cites, or dilution/capital-structure risk. Do NOT apply this to established
     profitable large-caps."""
 
+VERIFIER_EQUITY_LONG = _VERIFIER_HEAD + """
+3. The DCF assumptions (growth, discount, terminal) are missing or unreasonable, or the
+   bear/base/bull fair-value span is not presented.
+4. The LONG-TERM rating lacks a fair-value range, an accumulation zone, or a quantified
+   'WHAT KILLS THIS THESIS'.
+5. The rating contradicts the data (e.g. 'Buy' despite large DCF downside) with no rationale.
+6. Sector/industry context is missing (sector trend or peer comparison).
+7. Multi-year trends (revenue/FCF/EPS CAGR, margin trajectory, share count) are in the
+   transcript (tool_fundamentals) but the draft does not discuss them.
+8. Business moat / competitive position is never analysed; or revenue segments/mix are neither
+   discussed nor explicitly noted as unavailable; or a segment/market-share figure lacks a
+   source URL or attribution to the Yahoo business summary.
+9. There is no strengths/weaknesses/opportunities/risks assessment, no explicit long-term
+   investment hypothesis, or the rating is not tied to the hypothesis / moat / multi-year trends.
+10. ONLY for a pre-profit or story/micro-cap name: management's track record, anchor-deal
+    economics/structure, or dilution/capital-structure risk is ignored.
+11. The report does not open (after the title) with a '## TL;DR' section consistent with the body.
+12. Options analysis, RSI/MACD/Bollinger readings, or short-term entries/stops appear — this is
+    a LONG-TERM report; only the 200-day trend / 52-week context belongs.
+DO NOT require options OI, earnings-catalyst trading setups, or short-term technical levels."""
+
 VERIFIER_ETF = _VERIFIER_HEAD + """
 3. The fund's top holdings or sector weightings are not discussed (tool_etf data present but ignored).
 4. The expense ratio / cost is not mentioned when present in the transcript.
@@ -720,6 +813,13 @@ DO NOT require a DCF, single-company ratios, options, or SHORT/MID/LONG ratings 
 KINDS = {
     "equity": {"system": SYSTEM_EQUITY, "verifier": VERIFIER_EQUITY, "structural": True,
                "task": "Research {name} [{symbol}] — type equity. Original request: {q!r}."},
+    # long-horizon variant: the resolver sets intent["horizon"]="long" ('NVDA long' / 'long term
+    # ...') and research() remaps equity -> equity_long. Skips options, compresses technicals to
+    # trend context, one LONG rating. structural=False: STRUCT_VERIFIER expects three ratings.
+    "equity_long": {"system": SYSTEM_EQUITY_LONG, "verifier": VERIFIER_EQUITY_LONG,
+                    "structural": False,
+                    "task": "Research {name} [{symbol}] — long-term (3-5y) investment thesis. "
+                            "Original request: {q!r}."},
     "etf": {"system": SYSTEM_ETF, "verifier": VERIFIER_ETF, "structural": False,
             "task": "Research {name} [{symbol}] — type etf. Original request: {q!r}."},
     "index": {"system": SYSTEM_INDEX, "verifier": VERIFIER_INDEX, "structural": False,
@@ -1023,6 +1123,9 @@ def research(user_msg: str, max_passes: int = 3, intent: dict = None) -> str:
                   "query": user_msg}
         kind = intent["kind"]
         _log(f"ambiguous -> defaulting to top candidate {top['symbol']} ({kind})")
+
+    if kind == "equity" and intent.get("horizon") == "long":
+        kind = intent["kind"] = "equity_long"              # long-only report (no options/trading)
 
     system_p, verifier = _prompts_for(intent)
     label = (intent.get("symbol") or intent.get("sector_key")
