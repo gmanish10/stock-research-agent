@@ -175,14 +175,6 @@ async def choice_cmd(update, ctx):
     await _handle_query(update.message, ctx.chat_data, text)
 
 
-async def chatid_cmd(update, ctx):
-    """Reply with this chat's id + the sender's user id — for filling ALLOWED_IDS. Intentionally
-    NOT allow-list gated (ids aren't secret and you need it before allow-listing the group)."""
-    await update.message.reply_text(
-        f"chat id: {update.effective_chat.id}\nyour user id: {update.effective_user.id}\n"
-        "Add the relevant one to ALLOWED_IDS in .env, then restart the bot.")
-
-
 async def _on_error(_update, context):
     print(f"[bot] handler error: {context.error!r}", flush=True)
 
@@ -193,7 +185,6 @@ def main():
            .read_timeout(30).write_timeout(60).connect_timeout(30).pool_timeout(30)
            .build())
     app.add_handler(CommandHandler("research", research_cmd))
-    app.add_handler(CommandHandler("chatid", chatid_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, choice_cmd))
     app.add_error_handler(_on_error)
     print("Bot running (polling). Send /research <anything>. Ctrl+C to stop.", flush=True)
