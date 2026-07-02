@@ -82,16 +82,29 @@ def _slug(s):
     return re.sub(r"[^A-Za-z0-9]+", "-", s or "").strip("-")[:24] or "report"
 
 
+# Chats with a research run in flight. All handlers run on the one event loop and the
+# check-and-add below has no await between them, so a plain set is race-free (no lock).
+_running: set[int] = set()
+
+
 async def _run_and_send(message, query, intent):
-    kind, sym = intent.get("kind"), intent.get("symbol")
-    if kind in ("sector", "theme"):
-        what = intent.get("name") or intent.get("sector_key")
-    else:
-        what = f"{intent.get('name') or sym} [{sym}]"
-    await message.reply_text(f"🔍 Researching {what} ({kind}). Please wait.")
-    report = await asyncio.to_thread(engine.research, query, 3, intent)
-    label = sym or intent.get("sector_key") or _slug(intent.get("name") or query)
-    await _deliver(message, report, label)
+    if message.chat_id in _running:
+        return await message.reply_text(
+            "⏳ Still working on your previous request — I'll send it here when it's ready. "
+            "(One research at a time per chat.)")
+    _running.add(message.chat_id)
+    try:
+        kind, sym = intent.get("kind"), intent.get("symbol")
+        if kind in ("sector", "theme"):
+            what = intent.get("name") or intent.get("sector_key")
+        else:
+            what = f"{intent.get('name') or sym} [{sym}]"
+        await message.reply_text(f"🔍 Researching {what} ({kind}). Please wait.")
+        report = await asyncio.to_thread(engine.research, query, 3, intent)
+        label = sym or intent.get("sector_key") or _slug(intent.get("name") or query)
+        await _deliver(message, report, label)
+    finally:
+        _running.discard(message.chat_id)
 
 
 async def _deliver(message, report, label):
@@ -183,7 +196,12 @@ async def _on_error(_update, context):
 
 def main():
     token = os.environ["TELEGRAM_TOKEN"]
-    app = (Application.builder().token(token)
+    # concurrent_updates: without it PTB processes updates strictly sequentially, so one
+    # multi-minute research run head-of-line blocks EVERY chat (second user gets silence).
+    # The engine is concurrency-safe (thread-local yfinance cache per run); cap at 8 so a
+    # burst can't stampede the LLM/yfinance/Brave rate limits. Per-chat duplicates are
+    # rejected by the _running guard in _run_and_send.
+    app = (Application.builder().token(token).concurrent_updates(8)
            .read_timeout(30).write_timeout(60).connect_timeout(30).pool_timeout(30)
            .build())
     app.add_handler(CommandHandler("research", research_cmd))
