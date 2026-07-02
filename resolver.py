@@ -44,6 +44,12 @@ _QT_TO_KIND = {"EQUITY": "equity", "ETF": "etf", "INDEX": "index", "MUTUALFUND":
                "CURRENCY": "currency"}
 _KIND_TO_QT = {"equity": "EQUITY", "etf": "ETF", "index": "INDEX", "currency": "CURRENCY"}
 
+# ALL-CAPS words that are real Yahoo symbols but almost never meant as one in a phrase
+# (AI = C3.ai, ON = ON Semi, ...). Only consulted by the embedded-ticker check (2b).
+_TICKER_STOP = {"IPO", "CEO", "CFO", "GPU", "CPU", "USD", "EUR", "INR", "GBP", "JPY", "ETF",
+                "DCF", "EPS", "USA", "BUY", "SELL", "HOLD", "NYSE", "SPAC", "REIT", "CAGR",
+                "GAAP", "YOY", "AND", "THE", "FOR", "PDF", "LLM", "NEWS", "STOCK", "VS"}
+
 # yfinance's Sector tool is US-only, so a geographic qualifier means a US sector outlook is wrong —
 # route those to the theme pipeline (which discovers region-specific instruments via web search).
 GEO_WORDS = {"india", "indian", "china", "chinese", "europe", "european", "japan", "japanese",
@@ -67,8 +73,9 @@ _CLASSIFY = """Classify a finance research request. Reply JSON only:
 
 
 def _symbol_like(t):
-    """True for things the user clearly typed AS a symbol: ^IXIC, AAPL, RELIANCE.NS, USDINR=X."""
-    return bool(re.fullmatch(r"\^?[A-Z0-9]{1,6}(\.[A-Z]{1,4}|=X)?", t))
+    """True for things the user clearly typed AS a symbol: ^IXIC, AAPL, RELIANCE.NS, USDINR=X.
+    Suffixed symbols allow a longer stem (RELIANCE=8, TATAMOTORS=10 before .NS)."""
+    return bool(re.fullmatch(r"\^?[A-Z0-9]{1,6}(=X)?|[A-Z0-9]{1,10}\.[A-Z]{1,4}", t))
 
 
 def _fx_pair(t):
@@ -185,6 +192,22 @@ def resolve(text):
         qt, name = _verify(ALIASES[low])
         if qt:
             return _resolved(ALIASES[low], qt, name, t, "high")
+
+    # 2b) an embedded ticker ("Deep dive on SHAZ", "is TSLA a buy?"): a 3-6 char ALL-CAPS token
+    #     that verifies against real data beats the helper model's guess (which misrouted SHAZ
+    #     to a basic-materials sector outlook). len>=3 plus a stoplist keep common acronyms
+    #     (AI, GPU, ETF...) from being probed; requiring a UNIQUE candidate keeps multi-ticker
+    #     phrases ("compare NVDA and AMD") on the interactive path.
+    #     Suffixed (.KS/.NS) and =X forms may start with a digit ("005930.KS") — the suffix
+    #     alone already marks them unambiguously as symbols.
+    caps = [w for w in dict.fromkeys(
+                re.findall(r"\b(?:[A-Z][A-Z0-9]{2,5}(?:\.[A-Z]{1,4}|=X)?"
+                           r"|[A-Z0-9]{1,10}\.[A-Z]{1,4}|[A-Z]{6}=X)\b", t))
+            if w not in _TICKER_STOP]
+    if len(caps) == 1:
+        qt, name = _verify(caps[0])
+        if qt:
+            return _resolved(caps[0], qt, name, t, "high")
 
     # 3) llama intent (verified below, never trusted blindly)
     intent = _classify_llm(t) or {}
