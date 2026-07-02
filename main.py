@@ -540,10 +540,22 @@ Always run ALL of these (none optional):
    or deteriorating across the window and why that matters for a multi-year holder.
  - Business model & moat -> tool_fundamentals (business_summary) + tool_company_research: what
    the company sells, its revenue segments/mix, competitive position and moat (pricing power,
-   switching costs, scale, network effects, brand, regulation) and key competitors. For non-US
+   switching costs, scale, network effects, brand, regulation) and key competitors. State in one
+   line where the company sits in its industry VALUE CHAIN (what layer, who sits above/below it).
+   Define any niche term (e.g. 'neocloud') in plain language at first use. For non-US
    names search by COMPANY NAME, not the exchange-suffixed ticker. Cite source URLs for any
    segment or market-share figure. If segment data cannot be found, say so in ONE line — never
    guess a split.
+ - Calibrate depth to maturity. For early-stage / micro-cap / story names (tiny revenue vs
+   market cap, pre-profit, recently listed, few fiscal years on file) the load-bearing facts are:
+   management's track record (founders, prior ventures, how the company came public), the
+   economics and STRUCTURE of any anchor deal/partnership the thesis rests on (contract value,
+   duration, capacity, who funds what and how), and capital structure/dilution (float,
+   convertibles, share registrations, financing overhang) -> tool_company_research. If the
+   anchor deal's headline value or the founders'/CEO's names have not surfaced from the tools,
+   run ONE dedicated tool_company_research query for each (e.g. '<company> founders CEO
+   background', '<company> <partner> deal value') before writing; if still not found, say so.
+   For established large-caps cover these only where material — do not pad.
  - Valuation -> tool_dcf (state assumptions + implied upside/downside; present the bear/base/bull
    span from its sensitivity grid, not just one point estimate)
  - Technicals/trend -> tool_technicals
@@ -661,7 +673,11 @@ VERIFIER_EQUITY = _VERIFIER_HEAD + """
     a purely technical or momentum call).
 14. The report does not open (after the title) with a '## TL;DR' section, or the TL;DR is
     inconsistent with the rest: a number in the TL;DR is absent from the transcript, or the
-    TL;DR verdict / mini-table ratings contradict the full Ratings section."""
+    TL;DR verdict / mini-table ratings contradict the full Ratings section.
+15. ONLY for a pre-profit or story/micro-cap name (revenue tiny relative to market cap): the
+    draft ignores management's track record, the economics/structure of an anchor deal it
+    repeatedly cites, or dilution/capital-structure risk. Do NOT apply this to established
+    profitable large-caps."""
 
 VERIFIER_ETF = _VERIFIER_HEAD + """
 3. The fund's top holdings or sector weightings are not discussed (tool_etf data present but ignored).
