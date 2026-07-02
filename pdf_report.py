@@ -37,14 +37,52 @@ def _safe_label(label: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", label or "")[:12] or "report"
 
 
-# Currency glyphs the built-in PDF fonts lack (they render as ■ tofu) -> readable ISO codes.
-_GLYPH_FALLBACKS = {"₩": "KRW ", "₹": "Rs ", "₽": "RUB ", "₺": "TRY "}
+# The built-in PDF Type1 fonts (Helvetica) are WinAnsi-only — every glyph beyond that
+# (→ − ≈ ≥ β ₩ …) renders as ■ tofu. The real fix is embedding a Unicode TTF from the host
+# via @font-face (_font_css below); this map is only the fallback when no font is found,
+# swapping known offenders for ASCII so the report stays readable.
+_GLYPH_FALLBACKS = {"₩": "KRW ", "₹": "Rs ", "₽": "RUB ", "₺": "TRY ",
+                    "→": "->", "←": "<-", "↑": "(up)", "↓": "(down)",
+                    "−": "-", "≈": "~", "≥": ">=", "≤": "<=", "±": "+/-",
+                    "×": "x", "β": "beta", "•": "-"}
 
 
 def _transliterate(text: str) -> str:
     for ch, rep in _GLYPH_FALLBACKS.items():
         text = text.replace(ch, rep)
     return text
+
+
+# (regular, bold, italic) Unicode TTF candidates, first match wins. reportlab subsets
+# embedded fonts, so PDF size stays small. .ttc collections are NOT loadable — list only .ttf.
+_FONT_FAMILIES = [
+    ("/System/Library/Fonts/Supplemental/Arial.ttf",                   # macOS
+     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+     "/System/Library/Fonts/Supplemental/Arial Italic.ttf"),
+    ("/Library/Fonts/Arial Unicode.ttf", None, None),                  # older macOS
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",                # Debian/Ubuntu
+     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf"),
+    ("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",              # Fedora
+     "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
+     "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Oblique.ttf"),
+]
+
+
+def _font_css() -> str | None:
+    """@font-face rules for the first Unicode font family found on this host, or None."""
+    for regular, bold, italic in _FONT_FAMILIES:
+        if not os.path.exists(regular):
+            continue
+        rules = [f"@font-face {{ font-family: ReportSans; src: url('{regular}'); }}"]
+        if bold and os.path.exists(bold):
+            rules.append(f"@font-face {{ font-family: ReportSans; src: url('{bold}'); "
+                         "font-weight: bold; }")
+        if italic and os.path.exists(italic):
+            rules.append(f"@font-face {{ font-family: ReportSans; src: url('{italic}'); "
+                         "font-style: italic; }")
+        return "\n".join(rules)
+    return None
 
 
 def _add_colgroups(html: str) -> str:
@@ -120,9 +158,14 @@ def build_pdf(report_md: str, label: str, out_dir: str | None = None,
     when = when or datetime.date.today().isoformat()
     path = os.path.join(out_dir, f"{when}_{_safe_label(label)}.pdf")
 
-    md = _transliterate(_flatten_keyvalue_tables(report_md))
+    md = _flatten_keyvalue_tables(report_md)
+    font = _font_css()
+    if font:
+        css = font + _CSS.replace("Helvetica, sans-serif", "ReportSans, sans-serif")
+    else:                       # no Unicode font on this host -> ASCII-fy known tofu glyphs
+        css, md = _CSS, _transliterate(md)
     body = _add_colgroups(markdown.markdown(md, extensions=["tables", "fenced_code"]))
-    html = (f"<html><head><meta charset='utf-8'><style>{_CSS}</style></head>"
+    html = (f"<html><head><meta charset='utf-8'><style>{css}</style></head>"
             f"<body>{body}</body></html>")
     with open(path, "wb") as fh:
         result = pisa.CreatePDF(html, dest=fh, encoding="utf-8")
