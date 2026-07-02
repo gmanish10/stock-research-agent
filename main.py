@@ -37,6 +37,7 @@ import technicals          # noqa: E402  (your script, reused as-is)
 import financial_ratios    # noqa: E402  (your script, reused as-is)
 import options_analytics   # noqa: E402  (your script, reused as-is)
 import dcf as dcf_mod      # noqa: E402  (new, unit-tested)
+import fundamental_trends  # noqa: E402  (multi-year trends for the long-term view)
 
 client = OllamaClient(
     base_url=os.environ.get("OLLAMA_BASE_URL", "https://ollama.com/v1"),
@@ -100,6 +101,19 @@ def _prev(df):
     return {} if df is None or df.shape[1] < 2 else df.iloc[:, 1].to_dict()
 
 
+def _series(df):
+    """ALL fiscal-year columns as [{'period': 'YYYY-MM-DD', <line items>}], oldest -> newest.
+    Companion to _latest/_prev for the multi-year trends script (which handles NaN/missing)."""
+    if df is None or df.empty:
+        return []
+    out = []
+    for col in reversed(list(df.columns)):                 # yfinance is newest-first
+        d = df[col].to_dict()
+        d["period"] = str(col)[:10]
+        out.append(d)
+    return out
+
+
 # ---------- tools: thin wrappers around your scripts (DATA=yfinance, MATH=scripts) ----------
 
 def tool_lookup(query: str) -> str:                        # name/ticker -> real Yahoo symbols
@@ -137,6 +151,19 @@ def tool_ratios(ticker: str) -> str:                       # -> financial_ratios
         cashflow=_latest(_retry(lambda: t.cashflow)), prev_income=_prev(income),
         market_cap=_info(t).get("marketCap"))
     return json.dumps({"source": "yfinance + scripts/financial_ratios.py", "data": r.to_dict()})
+
+
+def tool_fundamentals(ticker: str) -> str:                 # -> fundamental_trends.py
+    t = _ticker(ticker)
+    tr = fundamental_trends.compute_trends(
+        income=_series(_retry(lambda: t.income_stmt)),
+        balance=_series(_retry(lambda: t.balance_sheet)),
+        cashflow=_series(_retry(lambda: t.cashflow)))
+    data = tr.to_dict()
+    # qualitative seed for the moat section — same cached .info, so this is free
+    summ = _info(t).get("longBusinessSummary")
+    data["business_summary"] = (summ or "")[:1500] or None
+    return json.dumps({"source": "yfinance + scripts/fundamental_trends.py", "data": data})
 
 
 def tool_technicals(ticker: str) -> str:                   # -> technicals.py
@@ -360,36 +387,52 @@ def _too_old(page_age, cutoff):
         return False
 
 
-def tool_web_search(query: str) -> str:                    # news/sentiment via Brave; returns URLs
-    # Brave's `freshness` filter is loose (a 3-month-old item slipped through `pm`), so we ALSO
-    # hard-drop results whose page_age parses older than BRAVE_MAX_AGE_DAYS, request extra to
-    # backfill after filtering, and surface each result's `age` so staleness stays visible.
-    freshness = os.environ.get("BRAVE_FRESHNESS", "pw")    # tightened default: past week
-    max_age = int(os.environ.get("BRAVE_MAX_AGE_DAYS", "30"))
-    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=max_age)
+def _brave(query, freshness=None, max_age_days=None, count=5):
+    """Shared Brave web search. freshness/max_age_days=None -> evergreen (no recency filter).
+    Brave's `freshness` filter is loose (a 3-month-old item slipped through `pm`), so when
+    max_age_days is set we ALSO hard-drop results whose page_age parses older, request extra
+    to backfill after filtering, and surface each result's `age` so staleness stays visible."""
+    params = {"q": query, "count": 12, "result_filter": "web"}
+    if freshness:
+        params["freshness"] = freshness
+    cutoff = (datetime.datetime.now(datetime.timezone.utc)
+              - datetime.timedelta(days=max_age_days)) if max_age_days else None
     resp = requests.get("https://api.search.brave.com/res/v1/web/search",
                         headers={"X-Subscription-Token": BRAVE_KEY, "Accept": "application/json"},
-                        params={"q": query, "count": 12, "freshness": freshness,
-                                "result_filter": "web"}, timeout=20)
+                        params=params, timeout=20)
     results = (resp.json().get("web") or {}).get("results", [])
     out = []
     for x in results:
-        if _too_old(x.get("page_age"), cutoff):
+        if cutoff and _too_old(x.get("page_age"), cutoff):
             continue
         out.append({"title": x.get("title"), "url": x.get("url"),
                     "age": x.get("age") or x.get("page_age"),     # human/ISO recency, visible to model
                     "content": (x.get("description") or "")[:500]})
-        if len(out) >= 5:
+        if len(out) >= count:
             break
+    return out
+
+
+def tool_web_search(query: str) -> str:                    # news/sentiment via Brave; returns URLs
+    freshness = os.environ.get("BRAVE_FRESHNESS", "pw")    # tightened default: past week
+    max_age = int(os.environ.get("BRAVE_MAX_AGE_DAYS", "30"))
+    out = _brave(query, freshness=freshness, max_age_days=max_age)
     return json.dumps({"source": f"Brave Search (freshness={freshness}, <={max_age}d)", "results": out})
 
 
+def tool_company_research(query: str) -> str:              # evergreen: durable facts, not news
+    out = _brave(query)                                    # no freshness filter, no age drop
+    return json.dumps({"source": "Brave Search (evergreen, no recency filter)", "results": out})
+
+
 TOOLS_IMPL = {"tool_snapshot": tool_snapshot, "tool_ratios": tool_ratios,
+              "tool_fundamentals": tool_fundamentals,
               "tool_technicals": tool_technicals, "tool_dcf": tool_dcf,
               "tool_options": tool_options, "tool_sector": tool_sector,
               "tool_sector_overview": tool_sector_overview, "tool_etf": tool_etf,
               "tool_lookup": tool_lookup,
-              "tool_analyst": tool_analyst, "tool_web_search": tool_web_search}
+              "tool_analyst": tool_analyst, "tool_web_search": tool_web_search,
+              "tool_company_research": tool_company_research}
 
 
 def _s(name, desc, props, req):
@@ -401,6 +444,10 @@ TOOLS_SPEC = [
     _s("tool_snapshot", "Business/sector/price snapshot (Yahoo Finance)",
        {"ticker": {"type": "string"}}, ["ticker"]),
     _s("tool_ratios", "Margins/ROE/ROIC/FCF-yield via financial_ratios.py",
+       {"ticker": {"type": "string"}}, ["ticker"]),
+    _s("tool_fundamentals", "Multi-year fundamental trends via fundamental_trends.py: revenue/EPS/"
+       "FCF CAGR, margin & ROIC trajectory per fiscal year, share count (dilution vs buybacks), "
+       "debt trend — plus the company's business description",
        {"ticker": {"type": "string"}}, ["ticker"]),
     _s("tool_technicals", "SMA/RSI/MACD/crosses via technicals.py",
        {"ticker": {"type": "string"}}, ["ticker"]),
@@ -426,6 +473,10 @@ TOOLS_SPEC = [
        {"ticker": {"type": "string"}}, ["ticker"]),
     _s("tool_web_search", "Recent news/sentiment; returns source URLs to cite",
        {"query": {"type": "string"}}, ["query"]),
+    _s("tool_company_research", "Evergreen company research via Brave (NO recency filter — durable "
+       "facts, NOT news): revenue segments/mix, moat, competitive position, market share, key "
+       "competitors. Returns source URLs to cite. Use tool_web_search for anything time-sensitive.",
+       {"query": {"type": "string"}}, ["query"]),
 ]
 
 _RATINGS_TAIL = """End with SHORT/MID/LONG ratings; each needs Rating, Conviction, Target, Entry,
@@ -437,11 +488,58 @@ _HARD_RULES = """HARD RULES:
 - Attribute each datum (Yahoo Finance, a named script, or a web_search URL). If a tool
   errors/returns empty, say 'unavailable' for that piece and continue."""
 
+# Prescribed output skeleton (equity only). Rendering constraints baked in: the mini-table
+# needs a FILLED header row (pdf_report._flatten_keyvalue_tables turns empty-header tables
+# into bullets) and 3+ columns get equal-width colgroups; the mandatory H1 title satisfies
+# _strip_preamble; the bot extracts '## TL;DR' for the instant Telegram message.
+_EQUITY_SKELETON = """OUTPUT FORMAT — use EXACTLY this markdown skeleton (one H1 title, then these
+H2 sections in this order; use H3 subheadings freely inside them; do not add/rename/reorder H2s):
+
+# <Company Name> [<TICKER>] — Equity Deep Dive
+
+## TL;DR
+Open with one bold verdict line (e.g. **Verdict: Accumulate — quality compounder, rich price**).
+Then 6-8 bullets covering: DCF fair value vs current price with % up/downside; the moat in one
+line; the dominant multi-year fundamental trend; the single biggest risk; the nearest catalyst
+with its date. Close the TL;DR with this mini-table — keep the header row filled in exactly as
+shown (an empty header row breaks rendering):
+| Horizon | Rating | Target | Conviction |
+|---|---|---|---|
+| SHORT | ... | ... | ... |
+| MID | ... | ... | ... |
+| LONG | ... | ... | ... |
+Every number in the TL;DR must also appear, with context, in the body below — the TL;DR
+introduces nothing new.
+
+## Key numbers
+One table: current price, market cap, trailing/forward P/E, margins, ROE/ROIC, FCF yield,
+DCF fair value and upside — every figure straight from tool results.
+
+## Business & Moat
+## Revenue segments
+## Multi-year fundamentals
+## Valuation
+## Technicals
+## Options positioning
+## Street view & catalysts
+## SWOT
+## Long-term hypothesis
+## Ratings"""
+
 SYSTEM_EQUITY = """You are an equity research analyst. For the ticker, produce ONE comprehensive,
 integrated deep dive — synthesize the phases together, do not output disconnected sections.
 Always run ALL of these (none optional):
  - Business + sector context -> tool_snapshot, tool_sector (sector trend, peer names, top ETFs)
  - Fundamentals -> tool_ratios
+ - Multi-year trends -> tool_fundamentals: revenue/EPS/FCF CAGR, margin and ROIC trajectory,
+   share count (dilution vs buybacks), debt trend. Say whether the fundamentals are improving
+   or deteriorating across the window and why that matters for a multi-year holder.
+ - Business model & moat -> tool_fundamentals (business_summary) + tool_company_research: what
+   the company sells, its revenue segments/mix, competitive position and moat (pricing power,
+   switching costs, scale, network effects, brand, regulation) and key competitors. For non-US
+   names search by COMPANY NAME, not the exchange-suffixed ticker. Cite source URLs for any
+   segment or market-share figure. If segment data cannot be found, say so in ONE line — never
+   guess a split.
  - Valuation -> tool_dcf (state assumptions + implied upside/downside; present the bear/base/bull
    span from its sensitivity grid, not just one point estimate)
  - Technicals/trend -> tool_technicals
@@ -454,10 +552,14 @@ Always run ALL of these (none optional):
    catalyst/risk that should shape the SHORT-term rating and stop), and compare the analyst
    price-target range and buy/hold/sell trend against your own DCF target.
  - Catalysts/news/sentiment -> tool_web_search (cite source URLs, last ~30 days)
+ - Long-term view: a brief STRENGTHS / WEAKNESSES / OPPORTUNITIES / RISKS assessment grounded in
+   the data above, then an explicit LONG-TERM INVESTMENT HYPOTHESIS (2-4 sentences): the durable
+   3-5+ year thesis for owning the business, what must stay true, and what would break it.
 The verdict must REFLECT the synthesis: tie targets to DCF and — where options exist — to max-pain/
 OI magnet levels; tie stops to technicals (ATR/SMA); and state how the sector trend and (if present)
-options skew support or threaten the thesis.
-""" + _HARD_RULES + "\n" + _RATINGS_TAIL
+options skew support or threaten the thesis. The LONG rating must follow explicitly from the
+long-term hypothesis, moat, and multi-year trends — not read as a stretched technical call.
+""" + _HARD_RULES + "\n" + _RATINGS_TAIL + "\n" + _EQUITY_SKELETON
 
 SYSTEM_ETF = """You are a markets analyst. INSTRUMENT: {name} [{symbol}] — an ETF/FUND, not a single
 company. Do NOT run a DCF, single-company ratios, or earnings/analyst tools (they don't apply).
@@ -526,7 +628,19 @@ VERIFIER_EQUITY = _VERIFIER_HEAD + """
 6. Options OPEN INTEREST is not analysed (call/put OI or P/C OI ratio, plus max-pain or OI magnets), when available.
 7. Sector/industry context is missing (sector trend or peer comparison).
 8. The verdict doesn't tie targets/stops back to the DCF, OI levels, or technicals (sections feel disconnected).
-9. A next earnings date or analyst price targets are present in the transcript but the draft ignores them."""
+9. A next earnings date or analyst price targets are present in the transcript but the draft ignores them.
+10. Multi-year trends (revenue/FCF/EPS CAGR, margin trajectory, share count) are in the transcript
+    (tool_fundamentals) but the draft does not discuss them.
+11. Business moat / competitive position is never analysed; or revenue segments/mix are neither
+    discussed nor explicitly noted as unavailable; or a segment/market-share figure lacks a source
+    URL (tool_company_research / tool_web_search) or attribution to the Yahoo business summary.
+12. There is no strengths/weaknesses/opportunities/risks assessment, or no explicit long-term
+    investment hypothesis.
+13. The LONG rating is not tied to the long-term hypothesis / multi-year fundamentals (it reads as
+    a purely technical or momentum call).
+14. The report does not open (after the title) with a '## TL;DR' section, or the TL;DR is
+    inconsistent with the rest: a number in the TL;DR is absent from the transcript, or the
+    TL;DR verdict / mini-table ratings contradict the full Ratings section."""
 
 VERIFIER_ETF = _VERIFIER_HEAD + """
 3. The fund's top holdings or sector weightings are not discussed (tool_etf data present but ignored).
@@ -600,7 +714,18 @@ def _stamp(out):
     return out
 
 
-def _agent_loop(msgs, max_rounds=16):
+_CONTINUE = ("Continue the research using the tool results above as your gathered data. "
+             "Call any remaining required tools, then write the full report.")
+
+
+def _agent_loop(msgs, max_rounds=20, facts=None):
+    """Tool loop with overflow insurance: if in-loop history exceeds AGENT_COMPACT_TOKENS
+    (~24k tok — never hit on a normal run), fold all tool results into `facts` and rebuild
+    a compact history, exactly like the fix passes do. `facts` is shared with research()
+    so compaction can never drop results from verification/persistence."""
+    facts = {} if facts is None else facts
+    head = list(msgs)                    # seed turns (system/user[/draft/issues]) — no tool msgs
+    compact_at = int(os.environ.get("AGENT_COMPACT_TOKENS", "24000"))
     for _ in range(max_rounds):
         m = client.chat.completions.create(model=MODEL, messages=msgs,
                                            tools=TOOLS_SPEC).choices[0].message
@@ -613,6 +738,14 @@ def _agent_loop(msgs, max_rounds=16):
             except Exception as e:
                 out = json.dumps({"error": str(e), "as_of": _now_iso()})
             msgs.append({"role": "tool", "tool_call_id": tc.id, "content": out})
+        # round boundary: every tool msg above is paired with its assistant tool_calls msg,
+        # so this is the one point where the history can be rebuilt without orphaning either.
+        if _approx_tokens(msgs) > compact_at:
+            _merge_tool_results(facts, msgs)
+            _log(f"compacting in-loop history at ~{_approx_tokens(msgs)} tok "
+                 f"({len(facts)} distinct tool results)")
+            msgs = head + [{"role": "user", "content": _facts_block(facts)},
+                           {"role": "user", "content": _CONTINUE}]
     return "Stopped after max tool rounds.", msgs
 
 
@@ -676,7 +809,7 @@ _FIX = ("A reviewer flagged these issues. Fix them — call tools again if neede
 def _verify(report, facts, verifier=VERIFIER_EQUITY):
     # facts is already deduped to the latest result per tool, so the whole set fits well
     # under this guard; the cap is a backstop, not the front-truncation it replaces.
-    transcript = "\n".join(f["content"] for f in facts.values())[:24000]
+    transcript = "\n".join(f["content"] for f in facts.values())[:32000]
     r = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "system", "content": verifier},
@@ -724,7 +857,12 @@ Fail (passed=false) and name the specific missing element if ANY is true:
    a 'WHAT KILLS THIS TRADE' line, or position size.
 3. Options open interest (OI) / put-call is never mentioned.
 4. The sector or peer context is never mentioned.
-5. The 'not financial advice' disclaimer is absent."""
+5. The 'not financial advice' disclaimer is absent.
+6. There is no 'TL;DR' section near the top containing a verdict and a SHORT/MID/LONG
+   summary table.
+7. There is no business moat / competitive-position discussion.
+8. There is no strengths/weaknesses/opportunities/risks (SWOT-style) assessment.
+9. There is no explicit long-term investment hypothesis."""
 
 
 def _structural_check(report, kind="equity"):
@@ -848,9 +986,9 @@ def research(user_msg: str, max_passes: int = 3, intent: dict = None) -> str:
     system = {"role": "system", "content": system_p}
     user = {"role": "user", "content": _task_message(intent)}
     msgs = [system, user]
-    report, msgs = _agent_loop(msgs)
-
     facts = {}                                             # (name, args) -> latest tool result
+    report, msgs = _agent_loop(msgs, facts=facts)          # shared: in-loop compaction folds into it
+
     passed = False
     for n in range(max_passes):                            # verify -> fix -> re-verify
         _merge_tool_results(facts, msgs)
@@ -868,7 +1006,7 @@ def research(user_msg: str, max_passes: int = 3, intent: dict = None) -> str:
                 {"role": "user", "content": _facts_block(facts)},
                 {"role": "assistant", "content": report},  # latest draft only, for the model to edit
                 {"role": "user", "content": _FIX.format(issues="\n- ".join(issues))}]
-        report, msgs = _agent_loop(msgs)
+        report, msgs = _agent_loop(msgs, facts=facts)
 
     _merge_tool_results(facts, msgs)                       # include the final pass's tool results
     report = _strip_preamble(report)                       # drop any "let me compile…" preamble

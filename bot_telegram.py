@@ -82,6 +82,17 @@ def _slug(s):
     return re.sub(r"[^A-Za-z0-9]+", "-", s or "").strip("-")[:24] or "report"
 
 
+def _extract_section(report_md, title):
+    """Return the '## <title>' section (heading + body up to the next '## '), or None."""
+    m = re.search(rf"^##\s+{re.escape(title)}\s*$", report_md, re.M)
+    if not m:
+        return None
+    rest = report_md[m.end():]
+    nxt = re.search(r"^## ", rest, re.M)
+    body = (rest[:nxt.start()] if nxt else rest).strip()
+    return f"## {title}\n{body}" if body else None
+
+
 async def _run_and_send(message, query, intent):
     kind, sym = intent.get("kind"), intent.get("symbol")
     if kind in ("sector", "theme"):
@@ -95,10 +106,19 @@ async def _run_and_send(message, query, intent):
 
 
 async def _deliver(message, report, label):
-    """Deliver as a dated PDF when possible; fall back to chunked text on any failure."""
+    """Deliver as a dated PDF when possible; fall back to chunked text on any failure.
+    Equity reports carry a '## TL;DR' section — send it as an instant text message before
+    the PDF (built FIRST: if the build fails, the chunked fallback already starts with the
+    TL;DR, so sending it early would duplicate it). Captions won't do — 1024-char cap."""
     if pdf_report is not None and os.environ.get("REPORT_PDF", "1") != "0":
         try:
             path = await asyncio.to_thread(pdf_report.build_pdf, report, label)
+            tldr = _extract_section(report, "TL;DR")
+            if tldr:
+                try:
+                    await message.reply_text(tldr[:4000])  # Telegram ~4096-char limit
+                except Exception as e:
+                    print(f"[bot] TL;DR send failed (non-fatal): {e!r}", flush=True)
             with open(path, "rb") as fh:
                 await message.reply_document(
                     document=fh, filename=os.path.basename(path),
