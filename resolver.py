@@ -9,7 +9,7 @@ model (see main._helper_model); set LOCAL_* to use a local one. Ambiguous cases 
 so the bot can ask the user.
 
 resolve(text) -> {
-    "kind": "equity"|"etf"|"index"|"sector"|"ambiguous"|"unknown",
+    "kind": "equity"|"etf"|"index"|"currency"|"sector"|"ambiguous"|"unknown",
     "symbol": str|None, "name": str|None, "sector_key": str|None,
     "candidates": [{"symbol","quote_type","name"}...],   # only when kind == "ambiguous"
     "query": original text,
@@ -40,8 +40,9 @@ ALIASES = {
     "russell 2000": "^RUT", "vix": "^VIX", "ftse": "^FTSE", "nikkei": "^N225",
 }
 
-_QT_TO_KIND = {"EQUITY": "equity", "ETF": "etf", "INDEX": "index", "MUTUALFUND": "etf"}
-_KIND_TO_QT = {"equity": "EQUITY", "etf": "ETF", "index": "INDEX"}
+_QT_TO_KIND = {"EQUITY": "equity", "ETF": "etf", "INDEX": "index", "MUTUALFUND": "etf",
+               "CURRENCY": "currency"}
+_KIND_TO_QT = {"equity": "EQUITY", "etf": "ETF", "index": "INDEX", "currency": "CURRENCY"}
 
 # yfinance's Sector tool is US-only, so a geographic qualifier means a US sector outlook is wrong —
 # route those to the theme pipeline (which discovers region-specific instruments via web search).
@@ -50,13 +51,15 @@ GEO_WORDS = {"india", "indian", "china", "chinese", "europe", "european", "japan
              "eurozone", "german", "germany", "france", "french", "canada", "canadian", "australian"}
 
 _CLASSIFY = """Classify a finance research request. Reply JSON only:
-{"kind": "<equity|etf|index|sector|theme|unknown>", "entity": "<company/fund/index name or ticker>",
+{"kind": "<equity|etf|index|currency|sector|theme|unknown>", "entity": "<company/fund/index name or ticker>",
  "sector_key": "<one of: technology, healthcare, financial-services, consumer-cyclical,
  consumer-defensive, energy, industrials, basic-materials, real-estate, utilities,
  communication-services — or empty>"}
 - "equity": a single company (e.g. "Apple", "should I buy TSLA").
 - "etf": a fund/ETF (e.g. "SOXX", "semiconductor etf").
 - "index": a market index (e.g. "Nifty IT", "S&P 500", "Nasdaq").
+- "currency": an FX pair or exchange rate (e.g. "USDINR", "dollar vs rupee", "euro rate").
+  Set entity to the 6-letter pair code (USDINR, EURUSD) with the base currency first.
 - "sector": ONE of the 11 standard sectors above (e.g. "tech sector outlook"). Set sector_key.
 - "theme": a thematic, geographic, or screen-style basket that is NOT one of the 11 sectors and
   NOT a single instrument (e.g. "Indian manufacturing", "EV supply chain", "AI infrastructure plays",
@@ -64,8 +67,15 @@ _CLASSIFY = """Classify a finance research request. Reply JSON only:
 
 
 def _symbol_like(t):
-    """True for things the user clearly typed AS a symbol: ^IXIC, AAPL, RELIANCE.NS."""
-    return bool(re.fullmatch(r"\^?[A-Z0-9]{1,6}(\.[A-Z]{1,4})?", t))
+    """True for things the user clearly typed AS a symbol: ^IXIC, AAPL, RELIANCE.NS, USDINR=X."""
+    return bool(re.fullmatch(r"\^?[A-Z0-9]{1,6}(\.[A-Z]{1,4}|=X)?", t))
+
+
+def _fx_pair(t):
+    """'USDINR' / 'usd inr' / 'USD/INR' -> the Yahoo FX symbol 'USDINR=X', else None.
+    Verification gates it: a 6-letter non-pair like 'ORACLE' fails _verify and falls through."""
+    m = re.fullmatch(r"([A-Za-z]{3})[ /\-]?([A-Za-z]{3})", t.strip())
+    return f"{m.group(1)}{m.group(2)}=X".upper() if m else None
 
 
 def _verify(symbol):
@@ -162,6 +172,14 @@ def resolve(text):
         if qt:
             return _resolved(t, qt, name, t, "high")
 
+    # 1b) currency-pair spelling (USDINR / usd inr / USD-INR) -> Yahoo '=X' symbol (HIGH).
+    #     _verify's quoteType==CURRENCY is the gate, so random 6-letter words fall through.
+    fx = _fx_pair(t)
+    if fx:
+        qt, name = _verify(fx)
+        if qt == "CURRENCY":
+            return _resolved(fx, qt, name, t, "high")
+
     # 2) alias map for named indices Search mis-ranks (HIGH)
     if low in ALIASES:
         qt, name = _verify(ALIASES[low])
@@ -185,6 +203,13 @@ def resolve(text):
     if kind == "theme":
         return _theme(t)
     entity = (intent.get("entity") or "").strip() or t
+    if kind == "currency":
+        fx = _fx_pair(entity)
+        if fx:
+            qt, name = _verify(fx)
+            if qt == "CURRENCY":
+                # pair spelling came from LLM inference (verified real) -> confirm, don't auto-run
+                return _resolved(fx, qt, name, t, "medium")
 
     # 4) yf.Search, biased by the inferred kind. A match must actually resemble the query
     #    (name overlap) to be auto-run; otherwise it's offered for confirmation, never assumed.

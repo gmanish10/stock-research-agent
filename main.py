@@ -135,6 +135,8 @@ def tool_snapshot(ticker: str) -> str:
     keys = ["longName", "sector", "industry", "marketCap", "currentPrice", "beta",
             "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "trailingPE", "forwardPE"]
     data = {k: i.get(k) for k in keys}
+    # currencies/indices carry the price in regularMarketPrice, not currentPrice
+    data["currentPrice"] = data["currentPrice"] or i.get("regularMarketPrice")
     # invalid/delisted symbol -> yfinance returns an empty .info; flag it so the model uses
     # tool_lookup instead of treating empty fields as real, and the coverage footer catches it.
     if not any(data.get(k) for k in ("longName", "currentPrice", "marketCap")):
@@ -518,13 +520,15 @@ DCF fair value and upside — every figure straight from tool results.
 ## Business & Moat
 ## Revenue segments
 ## Multi-year fundamentals
+## SWOT
 ## Valuation
+## Street view & catalysts
+## Long-term hypothesis
 ## Technicals
 ## Options positioning
-## Street view & catalysts
-## SWOT
-## Long-term hypothesis
-## Ratings"""
+## Ratings
+Section arc: business QUALITY (moat, segments, trends, SWOT) -> PRICE (DCF vs street) ->
+the long-term THESIS those two imply -> TIMING (technicals, options) -> ACTION (ratings)."""
 
 SYSTEM_EQUITY = """You are an equity research analyst. For the ticker, produce ONE comprehensive,
 integrated deep dive — synthesize the phases together, do not output disconnected sections.
@@ -579,6 +583,23 @@ describe exposure by sector/theme instead. Run these:
  - Technicals/trend -> tool_technicals (trend, RSI, SMA, support/resistance levels).
  - Macro/news drivers -> tool_web_search (rate/macro/policy catalysts, last ~30 days; cite URLs).
 Frame targets/stops as index LEVELS (note they're tradable via a tracking ETF/futures).
+""" + _HARD_RULES + "\n" + _RATINGS_TAIL
+
+SYSTEM_FX = """You are an FX strategist. INSTRUMENT: {name} [{symbol}] — a CURRENCY PAIR. Do NOT
+run a DCF, company ratios, options, earnings/analyst, or sector tools (they don't apply to FX).
+Run these:
+ - Rate/range -> tool_snapshot (current rate, 52-week range).
+ - Technicals/trend -> tool_technicals (trend, RSI, SMA, support/resistance levels) — the primary
+   levels framework for FX.
+ - Macro drivers -> tool_web_search: the interest-rate differential and both central banks' policy
+   paths (e.g. Fed vs RBI for USD/INR), inflation prints, trade/current-account balance, capital
+   flows, central-bank intervention, and commodity sensitivities (e.g. oil for INR). Cite URLs.
+State clearly which direction means what (e.g. USD/INR UP = rupee WEAKER). Frame targets/stops as
+exchange-rate LEVELS, and note the rate matters mainly for hedgers/importers/exporters/investors
+in the quote currency's market — not a retail 'trade ticket' unless the user asked.
+Open with '# <Pair> [<SYMBOL>] — FX Deep Dive', then a '## TL;DR' section: one bold verdict line,
+4-6 bullets (current rate + trend, the rate differential, biggest driver, biggest risk), and a
+| Horizon | Rating | Target | Conviction | mini-table with the header row filled in.
 """ + _HARD_RULES + "\n" + _RATINGS_TAIL
 
 SYSTEM_SECTOR = """You are a markets analyst. Produce a SECTOR OUTLOOK for the '{sector_key}' sector —
@@ -655,6 +676,14 @@ VERIFIER_INDEX = _VERIFIER_HEAD + """
 5. Macro/news drivers are not discussed.
 DO NOT require a DCF, company ratios, or options — this is an index."""
 
+VERIFIER_FX = _VERIFIER_HEAD + """
+3. Technical levels (trend, support/resistance) are missing.
+4. Any rating lacks a target level, a stop, or a quantified 'WHAT KILLS THIS TRADE'.
+5. Macro drivers are not discussed (rate differential / central-bank policy at minimum), or lack
+   cited URLs.
+6. The draft never states which direction means what (which side strengthens/weakens).
+DO NOT require a DCF, company ratios, options, or sector data — this is a currency pair."""
+
 VERIFIER_SECTOR = _VERIFIER_HEAD + """
 3. Sector trend or top peer companies are missing (tool_sector_overview data present but ignored).
 4. The main ETFs for exposure are not mentioned.
@@ -679,6 +708,8 @@ KINDS = {
             "task": "Research {name} [{symbol}] — type etf. Original request: {q!r}."},
     "index": {"system": SYSTEM_INDEX, "verifier": VERIFIER_INDEX, "structural": False,
               "task": "Research {name} [{symbol}] — type index. Original request: {q!r}."},
+    "currency": {"system": SYSTEM_FX, "verifier": VERIFIER_FX, "structural": False,
+                 "task": "Research {name} [{symbol}] — type currency pair. Original request: {q!r}."},
     "sector": {"system": SYSTEM_SECTOR, "verifier": VERIFIER_SECTOR, "structural": False,
                "task": "Produce a sector outlook for: {sector_key}. Original request: {q!r}."},
     "theme": {"system": SYSTEM_THEME, "verifier": VERIFIER_THEME, "structural": False,
